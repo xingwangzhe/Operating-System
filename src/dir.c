@@ -17,6 +17,7 @@ void _dir(void) {
     struct inode *temp_inode;
     unsigned int di_mode;
     int one;
+    unsigned int blkno;
 
     printf("\nCURRENT DIRECTORY ..\n");
     for (i = 0; i < dir.size; i++) {
@@ -39,10 +40,13 @@ void _dir(void) {
         }
 
         if (temp_inode->di_mode & DIFILE) {
-            printf("  %u", temp_inode->di_size);
+            printf("  %lu", temp_inode->di_size);
             printf("  block chain:");
-            for (k = 0; k < (int)(temp_inode->di_size / BLOCKSIZ) + 1; k++)
-                printf(" %d", (int)temp_inode->di_addr[k]);
+            for (k = 0; k < (int)(temp_inode->di_size / BLOCKSIZ) + 1; k++) {
+                blkno = bmap(temp_inode, (unsigned int)k, 0);
+                if (blkno != 0 && blkno != DISKFULL)
+                    printf(" %u", blkno);
+            }
             printf("\n");
         } else {
             printf("  <dir>\n");
@@ -141,21 +145,19 @@ void sync_dir(void) {
     }
     dir.size = j;
 
-    /* write back current directory blocks to disk */
-    for (i = 0; i < (int)(cur_path_inode->di_size / BLOCKSIZ) + 1; i++) {
-        if (cur_path_inode->di_addr[i] != 0)
-            bfree(cur_path_inode->di_addr[i]);
-    }
+    /* write back current directory blocks to disk: free all first */
+    itrunc(cur_path_inode);
 
     k = 0;
     for (i = 0; i < dir.size; i += BLOCKSIZ / (DIRSIZ + 2)) {
         block = balloc();
         if (block == DISKFULL) break;
+        /* directories are small — always fit in direct blocks (k < NDADDR) */
         cur_path_inode->di_addr[k++] = block;
         fseek(fd, DATASTART + (long)block * BLOCKSIZ, SEEK_SET);
         fwrite(&dir.direct[i], 1, BLOCKSIZ, fd);
     }
-    cur_path_inode->di_size = (unsigned short)(dir.size * (DIRSIZ + 2));
+    cur_path_inode->di_size = dir.size * (DIRSIZ + 2);
     /* cur_path_inode will be written to disk soon, but here we just update memory. 
        Note: we should not iput() cur_path_inode here because it's still being used. */
 }
@@ -192,10 +194,12 @@ void chdir(const char *name) {
     /* switch to the new directory */
     cur_path_inode = inode;
 
-    /* read the new directory contents */
+    /* read the new directory contents (via bmap for indirect support) */
     j = 0;
     for (i = 0; i < (int)(inode->di_size / BLOCKSIZ) + 1; i++) {
-        fseek(fd, DATASTART + (long)inode->di_addr[i] * BLOCKSIZ, SEEK_SET);
+        unsigned int blkno = bmap(inode, (unsigned int)i, 0);
+        if (blkno == 0 || blkno == DISKFULL) continue;
+        fseek(fd, DATASTART + (long)blkno * BLOCKSIZ, SEEK_SET);
         fread(&dir.direct[j], 1, BLOCKSIZ, fd);
         j += BLOCKSIZ / (DIRSIZ + 2);
     }

@@ -127,7 +127,7 @@ void init_root_dir(void) {
     }
 
     root->di_addr[0] = root_block;
-    root->di_size = (unsigned short)(2 * (DIRSIZ + 2));
+    root->di_size = 2 * (DIRSIZ + 2);
 
     /* write "." and ".." directory entries to disk */
     {

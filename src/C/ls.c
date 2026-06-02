@@ -34,8 +34,8 @@ void ls_long(void) {
             else printf("%c", one ? 'x' : '-');
         }
 
-        printf("  %6u  %5u  %s\n", 
-               temp_inode->di_size, 
+        printf("  %6lu  %5u  %s\n",
+               temp_inode->di_size,
                temp_inode->i_ino,
                dir.direct[i].d_name);
 

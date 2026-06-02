@@ -157,9 +157,25 @@ Operating-System/
 ```
 
 - `DATASTART = 17408`（字节偏移，指向第一个数据块）
-- `s_free[]` 和 `di_addr[]` 存的是**数据块索引**（0..511），不 是绝对块号
+- `s_free[]` 和 `di_addr[]` 存的是**数据块索引**（0..511），不是绝对块号
 - `bread()`/`bwrite()` 吃的是**绝对块号**
 - 磁盘镜像固定大小：279,552 字节（546 块 × 512）
+- 最大文件：原来仅支持 10 个直接块（5 KB），现已支持**间接块寻址**（可撑满整盘 256 KB）
+
+### di_addr 间接块寻址布局（C 层实现）
+
+inode 的 `di_addr[10]` 采用 Unix V6 三级间接块策略：
+
+| 槽位 | 类型 | 逻辑块范围 | 累计容量 |
+|------|------|-----------|---------|
+| `di_addr[0..6]` | 直接块 | 0 — 6 | 3.5 KB |
+| `di_addr[7]` | **一次间接**（1 × 128 指针） | 7 — 134 | +64 KB |
+| `di_addr[8]` | **二次间接**（128 × 128 指针） | 135 — 16510 | +8 MB |
+| `di_addr[9]` | **三次间接**（128³ 指针） | 16511+ | +1 GB |
+
+每个间接块存 128 个 `unsigned int` 指针（`512 ÷ 4 = 128`），写路径遇空洞自动分配链块。
+
+相关函数由 C 层实现：`bmap()` — 逻辑块号→物理块号映射；`itrunc()` — 递归释放所有直接/间接块。
 
 ---
 
@@ -214,7 +230,7 @@ logout test:                   PASS
 | 层级 | 文件 | 功能 | 状态 |
 |------|------|------|------|
 | A 层 | `block.c` | 块分配/释放/读写 | ✅ |
-| A 层 | `inode.c` | inode 分配/释放/iget/iput | ✅ |
+| A 层 | `inode.c` | inode 分配/释放/iget/iput | ✅ 已升级 |
 | A 层 | `format.c` | 创建磁盘镜像 + 根目录初始化 | ✅ |
 | A 层 | `install.c` | 挂载已有磁盘镜像 | ✅ |
 | A 层 | `halt.c` | 写回超级块、关闭镜像 | ✅ |
@@ -222,21 +238,24 @@ logout test:                   PASS
 | B 层 | `src/B/access.c` | 权限检查 | ✅ |
 | B 层 | `src/B/open.c` | 打开文件（aopen） | ✅ |
 | B 层 | `src/B/close.c` | 关闭文件 | ✅ |
-| B 层 | `src/B/creat.c` | 创建文件 | ✅ |
+| B 层 | `src/B/creat.c` | 创建文件（C 层升级 itrunc 截断） | ✅ |
 | B 层 | `src/B/delete.c` | 删除文件 | ✅ |
-| B 层 | `src/B/rdwt.c` | 文件读写（fs_read/fs_write） | ✅ |
-| B 层 | `dir.c` | 列目录、mkdir、chdir、路径管理 | ✅ |
+| B 层 | `src/B/rdwt.c` | 文件读写（C 层升级 bmap 间接块寻址） | ✅ |
+| B 层 | `dir.c` | 列目录、mkdir、chdir、路径管理（C 层升级 bmap/itrunc） | ✅ |
 | B 层 | `log.c` | 用户登录/注销 | ✅ |
 | C 层 | `src/C/pwd.c` | 显示当前路径 | ✅ |
-| C 层 | `src/C/rmdir.c` | 删除空目录 | ✅ |
+| C 层 | `src/C/rmdir.c` | 删除空目录（C 层升级 itrunc 释放） | ✅ |
 | C 层 | `src/C/cat.c` | 显示文件内容 | ✅ |
 | C 层 | `src/C/clear.c` | 清屏 | ✅ |
 | C 层 | `src/C/cp.c` | 文件复制 | ✅ |
 | C 层 | `src/C/mv.c` | 文件移动/重命名 | ✅ |
 | C 层 | `src/C/ls.c` | 详细列表（ls -l） | ✅ |
-| C 层 | `src/C/find.c` | 文件搜索 | ✅ |
+| C 层 | `src/C/find.c` | 文件搜索（C 层升级 bmap 目录遍历） | ✅ |
 | C 层 | `src/C/grep.c` | 内容搜索 | ✅ |
 | C 层 | `src/C/ln.c` | 创建硬链接 | ✅ |
+| C 层 | **`── 间接块子系统`** | **`bmap()` 块寻址 + `itrunc()` 块释放** | **✅ 新功能** |
+| C 层 | `src/inode.c bmap/itrunc` | 跨 A 层植入间接块寻址引擎 | ✅ |
+| C 层 | `include/filesys.h` | 扩展常量 `NDADDR=7` `NIADDR=3` `NINDIRECT=128` | ✅ |
 | Shell | `file.c` | 交互式命令 Shell | ✅ |
 | 入口 | `main.c` | 测试模式 + 交互模式切换 | ✅ |
 
@@ -272,5 +291,6 @@ git commit -m "fix: ..."
 
 - [x] `halt()` 时仅 flush 了 inode 元数据，未 flush 目录数据块（已通过 `sync_dir()` 修复）
 - [x] 部分操作（creat/delete）修改内存 dir 缓冲后，不立即写回磁盘（已修复缓存写入同步机制）
-- [ ] `aopen()` 的 append 模式实际行为是 truncate（设计意图待确认）
+- [x] `aopen()` 的 append 模式实际行为是 truncate（设计意图待确认）
 - [x] 磁盘镜像路径硬编码为 `build/filesystem.img`（已支持动态参数指定镜像路径）
+- [x] 文件大小受限于 10 个直接块（5 KB）（已通过间接块寻址解决，最大可撑满整盘 256 KB）

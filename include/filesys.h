@@ -67,6 +67,18 @@ extern "C" {
 #define FILEBLK     512
 #define NICFREE     50
 #define NICINOD     50
+
+/*
+ * Indirect block addressing (di_addr layout).
+ *
+ *   di_addr[0..NDADDR-1]  — direct blocks
+ *   di_addr[NDADDR]       — single indirect
+ *   di_addr[NDADDR+1]     — double indirect
+ *   di_addr[NDADDR+2]     — triple indirect
+ */
+#define NDADDR      7                     /* direct address slots (0..6)       */
+#define NIADDR      3                     /* indirect address slots (7..9)     */
+#define NINDIRECT   (BLOCKSIZ / sizeof(unsigned int))  /* 128 ptrs/indir blk */
 #define DINODESTART (2 * BLOCKSIZ)
 #define DATASTART   ((2 + DINODEBLK) * BLOCKSIZ)
 #define DIEMPTY     00000
@@ -105,7 +117,7 @@ struct inode {
     unsigned short di_mode;
     unsigned short di_uid;
     unsigned short di_gid;
-    unsigned short di_size;
+    unsigned long  di_size;        /* was unsigned short — widened for indir blk */
     unsigned int   di_addr[NADDR];
 };
 
@@ -187,6 +199,10 @@ void           iput(struct inode *ip);
 
 struct inode  *ialloc(void);
 void           ifree(unsigned int ino);
+
+/* ====== Indirect block support ====== */
+unsigned int   bmap(struct inode *ip, unsigned int bn, int create);
+void           itrunc(struct inode *ip);
 
 /* ====== High-level file/dir ops ====== */
 unsigned int   namei(const char *name);

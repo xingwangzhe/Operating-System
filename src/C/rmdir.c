@@ -34,8 +34,9 @@ void rmdir(const char *name) {
 
     count = 0;
     for (i = 0; i < (int)(inode->di_size / BLOCKSIZ) + 1; i++) {
-        if (inode->di_addr[i] == 0) continue;
-        fseek(fd, DATASTART + (long)inode->di_addr[i] * BLOCKSIZ, SEEK_SET);
+        unsigned int blkno = bmap(inode, (unsigned int)i, 0);
+        if (blkno == 0 || blkno == DISKFULL) continue;
+        fseek(fd, DATASTART + (long)blkno * BLOCKSIZ, SEEK_SET);
         fread(buf, 1, BLOCKSIZ, fd);
         for (int j = 0; j < BLOCKSIZ / (DIRSIZ + 2); j++) {
             if (buf[j].d_ino != DIEMPTY) {
@@ -52,12 +53,7 @@ void rmdir(const char *name) {
         return;
     }
 
-    for (i = 0; i < (int)(inode->di_size / BLOCKSIZ) + 1; i++) {
-        if (inode->di_addr[i] != 0) {
-            bfree(inode->di_addr[i]);
-        }
-    }
-
+    itrunc(inode);
     ifree(inode->i_ino);
     iput(inode);
 

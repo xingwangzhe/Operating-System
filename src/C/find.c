@@ -12,8 +12,9 @@ static void find_recursive(unsigned int dir_ino, const char *pattern, const char
     if (!inode) return;
 
     for (i = 0; i < (int)(inode->di_size / BLOCKSIZ) + 1; i++) {
-        if (inode->di_addr[i] == 0) continue;
-        fseek(fd, DATASTART + (long)inode->di_addr[i] * BLOCKSIZ, SEEK_SET);
+        unsigned int blkno = bmap(inode, (unsigned int)i, 0);
+        if (blkno == 0 || blkno == DISKFULL) continue;
+        fseek(fd, DATASTART + (long)blkno * BLOCKSIZ, SEEK_SET);
         fread(buf, 1, BLOCKSIZ, fd);
 
         for (j = 0; j < BLOCKSIZ / (DIRSIZ + 2); j++) {

@@ -102,8 +102,9 @@ int file_main(void) {
                 memset(&dir, 0, sizeof(dir));
                 j = 0;
                 for (i = 0; i < (int)(cur_path_inode->di_size / BLOCKSIZ) + 1; i++) {
-                    if (cur_path_inode->di_addr[i] == 0) continue;
-                    fseek(fd, DATASTART + (long)cur_path_inode->di_addr[i] * BLOCKSIZ, SEEK_SET);
+                    unsigned int blkno = bmap(cur_path_inode, (unsigned int)i, 0);
+                    if (blkno == 0 || blkno == DISKFULL) continue;
+                    fseek(fd, DATASTART + (long)blkno * BLOCKSIZ, SEEK_SET);
                     fread(&dir.direct[j], 1, BLOCKSIZ, fd);
                     j += BLOCKSIZ / (DIRSIZ + 2);
                 }

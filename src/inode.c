@@ -1,6 +1,7 @@
 #include "filesys.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 /*
  * iget: get an inode by its disk inode number.
@@ -81,10 +82,6 @@ struct inode *iget(unsigned int dinodeid) {
  * but balloc() allocates blocks, not frees them.  Changed to bfree().
  */
 void iput(struct inode *pinode) {
-    long addr;
-    unsigned int block_num;
-    int i;
-
     if (!pinode) return;
 
     if (pinode->i_count > 1) {
@@ -95,15 +92,13 @@ void iput(struct inode *pinode) {
     /* i_count == 1: last reference */
     if (pinode->di_number != 0) {
         /* write back dinode to disk */
-        addr = (long)DINODESTART + (long)pinode->i_ino * DINODESIZ;
+        long addr = (long)DINODESTART + (long)pinode->i_ino * DINODESIZ;
         if (fseek(fd, addr, SEEK_SET) == 0) {
             fwrite(&pinode->di_number, 1, sizeof(struct dinode), fd);
         }
     } else {
-        /* di_number == 0: file is deleted — free its blocks and inode */
-        block_num = pinode->di_size / BLOCKSIZ;
-        for (i = 0; i < (int)block_num; i++)
-            bfree(pinode->di_addr[i]);
+        /* di_number == 0: file is deleted — free all blocks via itrunc */
+        itrunc(pinode);
         ifree(pinode->i_ino);
     }
 
@@ -234,4 +229,245 @@ void ifree(unsigned int dinodeid) {
         if (dinodeid < filsys.s_rinode)
             filsys.s_rinode = dinodeid;
     }
+}
+
+/*
+ * =====================================================================
+ * bmap — map logical file block number → physical data block index
+ * =====================================================================
+ *
+ * di_addr[0..NDADDR-1]   → direct blocks  (7 × 512 = 3.5 KB)
+ * di_addr[NDADDR]        → single indirect (128 × 512 = 64 KB)
+ * di_addr[NDADDR+1]      → double indirect (128² × 512 = 8 MB)
+ * di_addr[NDADDR+2]      → triple indirect (128³ × 512 = 1 GB)
+ *
+ * @ip      file inode
+ * @bn      logical block number (0-based)
+ * @create  0 = read-only (return 0 for holes)
+ *          1 = allocate blocks for holes encountered (write path)
+ * @return  data-block index (relative to DATASTART),
+ *          0 for unallocated hole (read),
+ *          DISKFULL if allocation fails (write).
+ */
+unsigned int bmap(struct inode *ip, unsigned int bn, int create) {
+    unsigned int buf[NINDIRECT];    /* buffer for reading indirect blocks */
+    unsigned int *addrp;             /* address slot in di_addr[] */
+
+    /* ── Direct blocks: bn = [0, NDADDR) ── */
+    if (bn < NDADDR) {
+        addrp = &ip->di_addr[bn];
+        if (create && *addrp == 0) {
+            *addrp = balloc();
+            if (*addrp == DISKFULL) return DISKFULL;
+        }
+        return *addrp;
+    }
+    bn -= NDADDR;
+
+    /* ── Single indirect: bn = [NDADDR, NDADDR + NINDIRECT) ── */
+    if (bn < NINDIRECT) {
+        addrp = &ip->di_addr[NDADDR];           /* di_addr[7] */
+        if (create && *addrp == 0) {
+            *addrp = balloc();
+            if (*addrp == DISKFULL) return DISKFULL;
+        }
+        if (*addrp == 0) return 0;              /* hole */
+
+        fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[bn] == 0) {
+            buf[bn] = balloc();
+            if (buf[bn] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        return buf[bn];
+    }
+    bn -= NINDIRECT;
+
+    /* ── Double indirect: bn = [NINDIRECT, NINDIRECT²) ── */
+    if (bn < (unsigned int)NINDIRECT * NINDIRECT) {
+        unsigned int idx1 = bn / NINDIRECT;
+        unsigned int idx2 = bn % NINDIRECT;
+
+        addrp = &ip->di_addr[NDADDR + 1];       /* di_addr[8] */
+        if (create && *addrp == 0) {
+            *addrp = balloc();
+            if (*addrp == DISKFULL) return DISKFULL;
+        }
+        if (*addrp == 0) return 0;
+
+        fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[idx1] == 0) {
+            buf[idx1] = balloc();
+            if (buf[idx1] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        if (buf[idx1] == 0) return 0;
+
+        /* save L1 blkno before reusing buf */
+        unsigned int l1blk = buf[idx1];
+
+        fseek(fd, DATASTART + (long)l1blk * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[idx2] == 0) {
+            buf[idx2] = balloc();
+            if (buf[idx2] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)l1blk * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        return buf[idx2];
+    }
+    bn -= (unsigned int)NINDIRECT * NINDIRECT;
+
+    /* ── Triple indirect: bn >= NINDIRECT² ── */
+    {
+        unsigned int idx1 = bn / ((unsigned int)NINDIRECT * NINDIRECT);
+        unsigned int idx2 = (bn / NINDIRECT) % NINDIRECT;
+        unsigned int idx3 = bn % NINDIRECT;
+        unsigned int l1blk, l2blk;
+
+        addrp = &ip->di_addr[NDADDR + 2];       /* di_addr[9] */
+        if (create && *addrp == 0) {
+            *addrp = balloc();
+            if (*addrp == DISKFULL) return DISKFULL;
+        }
+        if (*addrp == 0) return 0;
+
+        fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[idx1] == 0) {
+            buf[idx1] = balloc();
+            if (buf[idx1] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)*addrp * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        if (buf[idx1] == 0) return 0;
+        l1blk = buf[idx1];
+
+        fseek(fd, DATASTART + (long)l1blk * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[idx2] == 0) {
+            buf[idx2] = balloc();
+            if (buf[idx2] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)l1blk * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        if (buf[idx2] == 0) return 0;
+        l2blk = buf[idx2];
+
+        fseek(fd, DATASTART + (long)l2blk * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+
+        if (create && buf[idx3] == 0) {
+            buf[idx3] = balloc();
+            if (buf[idx3] == DISKFULL) return DISKFULL;
+            fseek(fd, DATASTART + (long)l2blk * BLOCKSIZ, SEEK_SET);
+            fwrite(buf, 1, BLOCKSIZ, fd);
+        }
+        return buf[idx3];
+    }
+}
+
+/*
+ * =====================================================================
+ * itrunc — free all data and indirect blocks of an inode
+ * =====================================================================
+ *
+ * Walks the full indirect-block tree and frees every allocated block:
+ * direct blocks → single-indirect blocks → double → triple.
+ * Leaves the inode with di_size = 0 and all di_addr[] slots zeroed.
+ *
+ * Called from:
+ *   - iput()     when di_number reaches 0 (file deletion)
+ *   - creat()    when truncating an existing file
+ *   - sync_dir() when compacting a directory
+ */
+void itrunc(struct inode *ip) {
+    unsigned int buf[NINDIRECT];
+    unsigned int buf2[NINDIRECT];
+    unsigned int buf3[NINDIRECT];
+    unsigned int i, j, k;
+
+    if (!ip) return;
+
+    /* ── Free direct blocks ── */
+    for (i = 0; i < NDADDR; i++) {
+        if (ip->di_addr[i] != 0) {
+            bfree(ip->di_addr[i]);
+            ip->di_addr[i] = 0;
+        }
+    }
+
+    /* ── Free single indirect block ── */
+    if (ip->di_addr[NDADDR] != 0) {
+        memset(buf, 0, sizeof(buf));
+        fseek(fd, DATASTART + (long)ip->di_addr[NDADDR] * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+        for (i = 0; i < NINDIRECT; i++) {
+            if (buf[i] != 0)
+                bfree(buf[i]);
+        }
+        bfree(ip->di_addr[NDADDR]);
+        ip->di_addr[NDADDR] = 0;
+    }
+
+    /* ── Free double indirect block ── */
+    if (ip->di_addr[NDADDR + 1] != 0) {
+        memset(buf, 0, sizeof(buf));
+        fseek(fd, DATASTART + (long)ip->di_addr[NDADDR + 1] * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+        for (i = 0; i < NINDIRECT; i++) {
+            if (buf[i] != 0) {
+                memset(buf2, 0, sizeof(buf2));
+                fseek(fd, DATASTART + (long)buf[i] * BLOCKSIZ, SEEK_SET);
+                fread(buf2, 1, BLOCKSIZ, fd);
+                for (j = 0; j < NINDIRECT; j++) {
+                    if (buf2[j] != 0)
+                        bfree(buf2[j]);
+                }
+                bfree(buf[i]);
+            }
+        }
+        bfree(ip->di_addr[NDADDR + 1]);
+        ip->di_addr[NDADDR + 1] = 0;
+    }
+
+    /* ── Free triple indirect block ── */
+    if (ip->di_addr[NDADDR + 2] != 0) {
+        memset(buf, 0, sizeof(buf));
+        fseek(fd, DATASTART + (long)ip->di_addr[NDADDR + 2] * BLOCKSIZ, SEEK_SET);
+        fread(buf, 1, BLOCKSIZ, fd);
+        for (i = 0; i < NINDIRECT; i++) {
+            if (buf[i] != 0) {
+                memset(buf2, 0, sizeof(buf2));
+                fseek(fd, DATASTART + (long)buf[i] * BLOCKSIZ, SEEK_SET);
+                fread(buf2, 1, BLOCKSIZ, fd);
+                for (j = 0; j < NINDIRECT; j++) {
+                    if (buf2[j] != 0) {
+                        memset(buf3, 0, sizeof(buf3));
+                        fseek(fd, DATASTART + (long)buf2[j] * BLOCKSIZ, SEEK_SET);
+                        fread(buf3, 1, BLOCKSIZ, fd);
+                        for (k = 0; k < NINDIRECT; k++) {
+                            if (buf3[k] != 0)
+                                bfree(buf3[k]);
+                        }
+                        bfree(buf2[j]);
+                    }
+                }
+                bfree(buf[i]);
+            }
+        }
+        bfree(ip->di_addr[NDADDR + 2]);
+        ip->di_addr[NDADDR + 2] = 0;
+    }
+
+    ip->di_size = 0;
 }

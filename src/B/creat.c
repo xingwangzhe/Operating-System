@@ -99,16 +99,8 @@ int creat(const char *name) {
         }
 
         /* 步骤3: 释放旧文件的所有数据块 */
-        /* 遍历 di_addr[] 数组（NADDR=10，最多10个直接索引块） */
-        for (i = 0; i < NADDR; i++) {        /* NADDR 定义在 include/filesys.h，值=10 */
-            if (inode->di_addr[i] != 0) {    /* 跳过未分配的块（di_addr[i]==0 表示该索引未使用） */
-                                             /* 原始 bug：未检查就调用 bfree(0)，会错误释放块0 */
-                bfree(inode->di_addr[i]);    /* [任务A] 将数据块归还到空闲块栈 */
-                                             /* bfree 将块号推入 filsys.s_free[] 栈 */
-                                             /* 若栈满（s_pfree >= NICFREE=50）则先溢出到磁盘链块 */
-                inode->di_addr[i] = 0;       /* 清零块索引，标记为未分配 */
-            }
-        }
+        /* itrunc() 会遍历并释放所有直接块 + 间接块（单/双/三） */
+        itrunc(inode);
 
         /* 步骤4: 重置文件大小 */
         inode->di_size = 0;                  /* 截断后文件大小为 0 字节 */
