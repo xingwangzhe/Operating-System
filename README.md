@@ -32,6 +32,25 @@ make clean && make
 gcc -std=c99 -Wall -Wextra -Iinclude src/*.c src/B/*.c src/C/*.c -o build/fs.exe
 ```
 
+### 持久化验证
+
+文件系统数据保存在 `build/filesystem.img`，退出后重新运行数据不丢失：
+
+```bash
+# 第一次运行：创建文件
+./build/fs.exe
+# fs> format
+# fs> creat hello.txt
+# fs> write 1 "hello world"
+# fs> halt
+
+# 重新运行：install 恢复，数据仍在
+./build/fs.exe
+# fs> install
+# fs> cat hello.txt
+# hello world
+```
+
 ### 调试模式
 
 编译时加 `-DFS_DEBUG` 开启调试输出：
@@ -44,9 +63,10 @@ gcc -std=c99 -Wall -Wextra -DFS_DEBUG -Iinclude src/*.c src/B/*.c src/C/*.c -o b
 
 ## 交互式 Shell 使用
 
-启动后输入命令操作文件系统：
+启动后输入命令操作文件系统。数据自动持久化到 `build/filesystem.img`，重新运行后 `install` 即可恢复：
 
 ```
+fs> install               # 加载已有文件系统（接续上次数据）
 fs> format                # 创建新的文件系统
 fs> pwd                   # 显示当前路径
 fs> dir                   # 列出当前目录
@@ -114,7 +134,7 @@ Operating-System/
 │   ├── inode.c           # inode 分配/释放/iget/iput（哈希链）
 │   ├── format.c          # 创建磁盘镜像 + 初始化根目录
 │   ├── install.c         # 挂载已有磁盘镜像
-│   ├── halt.c            # 写回超级块 + 关闭镜像
+│   ├── halt.c            # 关闭打开文件 → 写回超级块 → 关闭镜像
 │   ├── name.c            # 目录中按名查找/存储（namei/iname）
 │   ├── access.c          # 权限检查（user → group → other）
 │   ├── dir.c             # 列目录、mkdir、chdir、路径管理
@@ -190,6 +210,43 @@ inode 的 `di_addr[10]` 采用 Unix V6 三级间接块策略：
 | `close()` / `fs_read()` / `fs_write()` | — | — | 接受 1-based fd |
 
 `user[].u_ofile[0]` 故意留空，让 fd=0 明确表示失败。
+
+---
+
+## 数据持久化
+
+文件系统数据保存在磁盘镜像文件 `build/filesystem.img` 中，支持跨会话持久化。
+
+### 存盘流程（`halt`）
+
+```
+halt()
+  ├─ 关闭所有用户的打开文件描述符（→ iput() 写回每个 inode）
+  ├─ sync_dir()     → 当前目录条目写回数据区
+  ├─ iput(当前目录)  → 目录 inode 写回 inode 表
+  ├─ fwrite(&filsys)→ 超级块写回块 1
+  └─ fclose(fd)     → 关闭镜像文件
+```
+
+### 加载流程（`install`）
+
+```
+install(path)
+  ├─ fopen(path, "r+b")  → 打开已有镜像
+  ├─ fread(&filsys)      → 读取超级块（空闲栈信息）
+  ├─ iget(1)             → 加载根目录 inode
+  ├─ 读取目录块 → dir.direct[] 恢复当前目录
+  └─ 设置 cur_path_inode → 恢复环境
+```
+
+### 支持动态镜像路径
+
+`format` 和 `install` 可指定镜像文件路径（省略时默认 `build/filesystem.img`）：
+
+```
+fs> format /path/to/my.img
+fs> install /path/to/my.img
+```
 
 ---
 
@@ -335,3 +392,4 @@ git commit -m "fix: ..."
 - [x] `aopen()` 的 append 模式实际行为是 truncate（设计意图待确认）
 - [x] 磁盘镜像路径硬编码为 `build/filesystem.img`（已支持动态参数指定镜像路径）
 - [x] 文件大小受限于 10 个直接块（5 KB）（已通过间接块寻址解决，最大可撑满整盘 256 KB）
+- [x] `halt()` 未关闭打开的文件描述符，导致 inode 修改留在内存未写盘，重启后文件数据丢失（已修复：halt 时遍历所有用户的 u_ofile 逐一 iput 写回）

@@ -3,7 +3,25 @@
 #include <stdio.h>
 
 void halt(void) {
+    int i, j;
+    unsigned int sys_no;
+
     debug_log("halt: shutting down...\n");
+
+    /* Close all open file descriptors for all users so inodes flush to disk */
+    for (i = 0; i < USERNUM; i++) {
+        for (j = 0; j < NOFILE; j++) {
+            if (user[i].u_ofile[j] != SYSOPENFILE + 1) {
+                sys_no = user[i].u_ofile[j];
+                if (sys_no < SYSOPENFILE && sys_ofile[sys_no].f_inode) {
+                    iput(sys_ofile[sys_no].f_inode);
+                    sys_ofile[sys_no].f_count = 0;
+                    sys_ofile[sys_no].f_inode = NULL;
+                }
+                user[i].u_ofile[j] = SYSOPENFILE + 1;
+            }
+        }
+    }
 
     /* Sync memory directory buffer to disk */
     sync_dir();
