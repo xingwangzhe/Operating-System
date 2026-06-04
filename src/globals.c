@@ -26,3 +26,6 @@ struct inode *cur_path_inode = NULL;
 
 /* current user id */
 int user_id = 0;
+
+/* login state: 0 = not logged in, 1 = logged in */
+int logged_in = 0;

@@ -21,7 +21,7 @@ int login(const char *name, const char *passwd) {
 
     for (i = 0; i < PWDNUM; i++) {
         if (pwd[i].p_uid != 0 &&
-            strcmp(name, pwd[i].password) == 0 &&
+            strcmp(name, pwd[i].p_name) == 0 &&
             strcmp(passwd, pwd[i].password) == 0) {
             /* find a free user slot */
             for (j = 0; j < USERNUM; j++)
@@ -36,6 +36,7 @@ int login(const char *name, const char *passwd) {
             user[j].u_gid          = pwd[i].p_gid;
             user[j].u_default_mode = DEFAULTMODE;
             user_id = j;
+            logged_in = 1;
             return 1;
         }
     }
@@ -74,4 +75,5 @@ void logout(void) {
     user[user_id].u_uid = 0;
     user[user_id].u_gid = 0;
     user_id = 0;
+    logged_in = 0;
 }

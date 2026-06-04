@@ -22,7 +22,7 @@ ln -sf /ucrt64/bin/mingw32-make.exe /ucrt64/bin/make.exe
 # 编译
 make clean && make
 
-# 跑测试（22 项全部 PASS）
+# 跑测试（24 项全部 PASS）
 ./build/fs.exe --test
 
 # 进入交互式 Shell
@@ -61,6 +61,8 @@ fs> mv copy.txt renamed.txt # 移动/重命名文件
 fs> find "myfile"         # 搜索文件
 fs> grep "hello" myfile   # 在文件中搜索字符串
 fs> ln myfile hardlink    # 创建硬链接
+fs> login root root       # 用户登录（获得属主权限）
+fs> logout                # 用户注销（降为最低权限）
 fs> rmdir testdir         # 删除空目录
 fs> clear                 # 清屏
 fs> halt                  # 退出
@@ -106,7 +108,7 @@ Operating-System/
 │   └── filesys.h         # 所有结构体、常量、函数声明
 ├── src/
 │   ├── main.c            # 入口（--test 测试模式 / 交互 Shell）
-│   ├── test.c            # 自测代码（22 项）
+│   ├── test.c            # 自测代码（24 项）
 │   ├── globals.c         # 全局变量定义
 │   ├── block.c           # 块分配/释放/读写（V6 链式空闲块）
 │   ├── inode.c           # inode 分配/释放/iget/iput（哈希链）
@@ -191,7 +193,46 @@ inode 的 `di_addr[10]` 采用 Unix V6 三级间接块策略：
 
 ---
 
-## 测试结果（22 项全 PASS）
+## 权限系统
+
+采用 Unix V6 风格 9 位权限（`rwx`），用于控制文件/目录的读、写、执行（目录为进入）权限。
+
+### 权限位
+
+```
+ rwx  rwx  rwx
+属主  同组  其他
+```
+
+| 权限值 | 文件含义 | 目录含义 |
+|--------|---------|---------|
+| `r`（读） | 查看文件内容（cat） | 列出目录内容（dir） |
+| `w`（写） | 修改文件内容（write） | 在目录中增删文件（creat/delete） |
+| `x`（执行） | 执行文件 | 进入目录（chdir） |
+
+### 默认权限
+
+- 宏 `DEFAULTMODE = 00755`（原为 `00777`）
+- 新建文件/目录默认权限：**`rwxr-xr-x`**
+  - 属主：读写+执行（`rwx`）
+  - 同组：读+执行（`r-x`）
+  - 其他：读+执行（`r-x`）
+
+### 登录 vs 未登录
+
+系统使用 `logged_in` 标志区分状态：
+
+| 状态 | 权限检查范围 | 典型行为 |
+|------|-------------|---------|
+| **未登录**（默认） | 仅检查"其他用户(other)"权限位 | 只能读他人文件，不能写 |
+| **已登录**（`login` 后） | 完整三层检查（其他→同组→属主） | 属主可写，他人按组/其他权限 |
+
+- `login <用户名> <密码>` — 登录后获得属主身份，按完整权限检查
+- `logout` — 注销后降级为最低权限（仅 other）
+
+这意味着不登录时只能拥有最受限的权限，登录后才能根据文件属主获得相应的读写权限。
+
+## 测试结果（24 项全 PASS）
 
 ```
 === smoke test start ===
@@ -280,7 +321,7 @@ logout test:                   PASS
 ```bash
 git status                  # 确认要提交的文件
 make clean && make          # 确认编译通过
-./build/fs.exe --test       # 确认 22 项全 PASS
+./build/fs.exe --test       # 确认 24 项全 PASS
 git add src/xxx.c ...       # 只加源文件，别用 git add -A
 git commit -m "fix: ..."
 ```

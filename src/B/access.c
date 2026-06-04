@@ -52,6 +52,17 @@
  *   - 都不满足 → 拒绝
  */
 static int check_access(struct inode *inode, unsigned short mode) {
+    /* 未登录：仅检查"其他用户(other)"权限位，不查同组/属主 */
+    if (!logged_in) {
+        switch (mode) {
+        case READ:   return (inode->di_mode & ODIREAD)   ? 1 : 0;
+        case WRITE:  return (inode->di_mode & ODIWRITE)  ? 1 : 0;
+        case EXICUTE: return (inode->di_mode & ODIEXICUTE) ? 1 : 0;
+        default:     return 0;
+        }
+    }
+
+    /* 已登录：完整的三层检查（其他→同组→属主，从宽到严） */
     switch (mode) {                          /* 根据请求的访问类型分派 */
 
     case READ:                               /* ─── 读权限检查 ─── */

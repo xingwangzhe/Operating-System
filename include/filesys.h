@@ -96,7 +96,7 @@ extern "C" {
 #define READ        1
 #define WRITE       2
 #define EXICUTE     3
-#define DEFAULTMODE 00777
+#define DEFAULTMODE 00755
 #define IUPDATE     00002
 #define SUPDATE     00001
 #define FREAD       00001
@@ -151,6 +151,7 @@ struct filsys {
 struct pwd {
     unsigned short p_uid;
     unsigned short p_gid;
+    char           p_name[PWDSIZ];
     char           password[PWDSIZ];
 };
 
@@ -187,6 +188,7 @@ extern struct user    user[USERNUM];
 extern FILE          *fd;
 extern struct inode  *cur_path_inode;
 extern int            user_id;
+extern int            logged_in;
 
 /* ====== A-layer (block/inode alloc) ====== */
 unsigned int   balloc(void);

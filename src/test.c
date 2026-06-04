@@ -218,9 +218,10 @@ int run_all_tests(void) {
     {
         int r;
 
-        /* set up a test password entry (uid=1, gid=1, pw="test") */
+        /* set up a test user entry (uid=1, gid=1, name="test", pw="test") */
         pwd[0].p_uid = 1;
         pwd[0].p_gid = 1;
+        strcpy(pwd[0].p_name, "test");
         strcpy(pwd[0].password, "test");
 
         r = login("test", "wrong");
