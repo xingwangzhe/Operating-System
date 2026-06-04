@@ -42,6 +42,12 @@ void format(const char *image_path) {
             user[i].u_ofile[j] = SYSOPENFILE + 1;
     }
 
+    /* initialize default password table entries */
+    memset(pwd, 0, sizeof(pwd));
+    pwd[0].p_uid = 1;  pwd[0].p_gid = 1;  strcpy(pwd[0].p_name, "root");  strcpy(pwd[0].password, "root");
+    pwd[1].p_uid = 2;  pwd[1].p_gid = 1;  strcpy(pwd[1].p_name, "user");  strcpy(pwd[1].password, "pass");
+    pwd[2].p_uid = 3;  pwd[2].p_gid = 2;  strcpy(pwd[2].p_name, "test");  strcpy(pwd[2].password, "1234");
+
     fd = fopen(DISK_IMAGE, "w+b");
     if (!fd) die("cannot create disk image");
 

@@ -261,11 +261,25 @@ fs> install /path/to/my.img
 属主  同组  其他
 ```
 
+| 八进制 | 二进制 | 含义 |
+|--------|--------|------|
+| `00400` | `r` | 属主读 |
+| `00200` | `w` | 属主写 |
+| `00100` | `x` | 属主执行 |
+| `00040` | `r` | 同组读 |
+| `00020` | `w` | 同组写 |
+| `00010` | `x` | 同组执行 |
+| `00004` | `r` | 其他读 |
+| `00002` | `w` | 其他写 |
+| `00001` | `x` | 其他执行 |
+
 | 权限值 | 文件含义 | 目录含义 |
 |--------|---------|---------|
 | `r`（读） | 查看文件内容（cat） | 列出目录内容（dir） |
 | `w`（写） | 修改文件内容（write） | 在目录中增删文件（creat/delete） |
 | `x`（执行） | 执行文件 | 进入目录（chdir） |
+
+> ⚠️ **Bug 修复：** 原始代码中 9 个权限宏全部反位（`UDIREAD=00001` 却在 ODI 的位置）。已按 POSIX 标准修正为属主 `00400/00200/00100`、同组 `00040/00020/00010`、其他 `00004/00002/00001`。
 
 ### 默认权限
 
@@ -329,31 +343,32 @@ logout test:                   PASS
 |------|------|------|------|
 | A 层 | `block.c` | 块分配/释放/读写 | ✅ |
 | A 层 | `inode.c` | inode 分配/释放/iget/iput | ✅ 已升级 |
-| A 层 | `format.c` | 创建磁盘镜像 + 根目录初始化 | ✅ |
+| A 层 | `format.c` | 创建磁盘镜像 + 根目录初始化 + 预设用户表 | ✅ |
 | A 层 | `install.c` | 挂载已有磁盘镜像 | ✅ |
-| A 层 | `halt.c` | 写回超级块、关闭镜像 | ✅ |
+| A 层 | `halt.c` | 关闭打开文件 → 写回超级块 → 关闭镜像 | ✅ 已修复 |
 | B 层 | `src/B/name.c` | 路径名解析（namei/iname） | ✅ |
-| B 层 | `src/B/access.c` | 权限检查 | ✅ |
+| B 层 | `src/B/access.c` | 权限检查（含 logged_in 登录/未登录区分） | ✅ 已升级 |
 | B 层 | `src/B/open.c` | 打开文件（aopen） | ✅ |
 | B 层 | `src/B/close.c` | 关闭文件 | ✅ |
 | B 层 | `src/B/creat.c` | 创建文件（C 层升级 itrunc 截断） | ✅ |
 | B 层 | `src/B/delete.c` | 删除文件 | ✅ |
 | B 层 | `src/B/rdwt.c` | 文件读写（C 层升级 bmap 间接块寻址） | ✅ |
 | B 层 | `dir.c` | 列目录、mkdir、chdir、路径管理（C 层升级 bmap/itrunc） | ✅ |
-| B 层 | `log.c` | 用户登录/注销 | ✅ |
+| B 层 | `log.c` | 用户登录/注销（logged_in 状态联动） | ✅ 已升级 |
+| B 层 | `globals.c` | 全局变量（含 logged_in 标志） | ✅ 已升级 |
 | C 层 | `src/C/pwd.c` | 显示当前路径 | ✅ |
 | C 层 | `src/C/rmdir.c` | 删除空目录（C 层升级 itrunc 释放） | ✅ |
 | C 层 | `src/C/cat.c` | 显示文件内容 | ✅ |
 | C 层 | `src/C/clear.c` | 清屏 | ✅ |
 | C 层 | `src/C/cp.c` | 文件复制 | ✅ |
 | C 层 | `src/C/mv.c` | 文件移动/重命名 | ✅ |
-| C 层 | `src/C/ls.c` | 详细列表（ls -l） | ✅ |
+| C 层 | `src/C/ls.c` | 详细列表（ls -l，修复权限位显示顺序） | ✅ 已修复 |
 | C 层 | `src/C/find.c` | 文件搜索（C 层升级 bmap 目录遍历） | ✅ |
 | C 层 | `src/C/grep.c` | 内容搜索 | ✅ |
 | C 层 | `src/C/ln.c` | 创建硬链接 | ✅ |
+| C 层 | `include/filesys.h` | 扩展常量 + 修复权限宏定义 | ✅ 已修复 |
 | C 层 | **`── 间接块子系统`** | **`bmap()` 块寻址 + `itrunc()` 块释放** | **✅ 新功能** |
 | C 层 | `src/inode.c bmap/itrunc` | 跨 A 层植入间接块寻址引擎 | ✅ |
-| C 层 | `include/filesys.h` | 扩展常量 `NDADDR=7` `NIADDR=3` `NINDIRECT=128` | ✅ |
 | Shell | `file.c` | 交互式命令 Shell | ✅ |
 | 入口 | `main.c` | 测试模式 + 交互模式切换 | ✅ |
 
@@ -393,3 +408,6 @@ git commit -m "fix: ..."
 - [x] 磁盘镜像路径硬编码为 `build/filesystem.img`（已支持动态参数指定镜像路径）
 - [x] 文件大小受限于 10 个直接块（5 KB）（已通过间接块寻址解决，最大可撑满整盘 256 KB）
 - [x] `halt()` 未关闭打开的文件描述符，导致 inode 修改留在内存未写盘，重启后文件数据丢失（已修复：halt 时遍历所有用户的 u_ofile 逐一 iput 写回）
+- [x] 权限常量 `UDIREAD`~`ODIEXICUTE` 9 个宏全部反位，导致权限检查逻辑失效（已按 POSIX 标准修正）
+- [x] `ls -l` 权限位显示从 LSB 读到 MSB，顺序为"其他→同组→属主"（已改为从 MSB 到 LSB，正确显示 `rwxr-xr-x`）
+- [x] 无预设用户，`login` 无法演示使用（已修复：format 时初始化 root/root、user/pass、test/1234 三个预设用户）

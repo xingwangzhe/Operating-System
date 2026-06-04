@@ -26,12 +26,12 @@ void ls_long(void) {
 
         printf("%c", (di_mode & DIDIR) ? 'd' : '-');
         
-        for (k = 0; k < 9; k++) {
-            one = di_mode % 2;
-            di_mode = di_mode / 2;
-            if (k % 3 == 0) printf("%c", one ? 'r' : '-');
-            else if (k % 3 == 1) printf("%c", one ? 'w' : '-');
-            else printf("%c", one ? 'x' : '-');
+        /* 从高位到低位读：位8=属主r, 7=属主w, 6=属主x, 5=组r, 4=组w, 3=组x, 2=其他r, 1=其他w, 0=其他x */
+        for (k = 8; k >= 0; k--) {
+            one = (di_mode >> (unsigned int)k) & 1;
+            if (k % 3 == 2) printf("%c", one ? 'r' : '-');   /* 读位 */
+            else if (k % 3 == 1) printf("%c", one ? 'w' : '-'); /* 写位 */
+            else printf("%c", one ? 'x' : '-');                /* 执行位 */
         }
 
         printf("  %6lu  %5u  %s\n",
